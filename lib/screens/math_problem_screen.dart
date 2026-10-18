@@ -378,7 +378,11 @@ class _MathProblemScreenState extends State<MathProblemScreen> {
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.bold,
-                              color: isCorrect ? Colors.green : Colors.red,
+                              color: feedback == 'Wrong!'
+                                  ? Colors.black
+                                  : isCorrect
+                                      ? Colors.green
+                                      : Colors.red,
                             ),
                           ),
                         ],

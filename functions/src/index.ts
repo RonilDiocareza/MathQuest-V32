@@ -111,12 +111,16 @@ export const registerStudent = onCall(async (request) => {
   const lrnRef = db
     .collection("lrnIndexes")
     .doc(lrnIndexId(lrn));
+  const legacyLrnRef = db
+    .collection("lrnIndexes")
+    .doc(lrn);
 
   await db.runTransaction(async (transaction) => {
-    const [userSnapshot, lrnSnapshot] =
+    const [userSnapshot, lrnSnapshot, legacyLrnSnapshot] =
       await Promise.all([
         transaction.get(userRef),
         transaction.get(lrnRef),
+        transaction.get(legacyLrnRef),
       ]);
 
     if (userSnapshot.exists) {
@@ -139,6 +143,16 @@ export const registerStudent = onCall(async (request) => {
     if (
       lrnSnapshot.exists &&
       lrnSnapshot.data()?.uid !== uid
+    ) {
+      throw new HttpsError(
+        "already-exists",
+        "This LRN is already registered.",
+      );
+    }
+
+    if (
+      legacyLrnSnapshot.exists &&
+      legacyLrnSnapshot.data()?.uid !== uid
     ) {
       throw new HttpsError(
         "already-exists",
@@ -181,6 +195,7 @@ export const registerStudent = onCall(async (request) => {
       profilePhotoUrl: "",
       tutorialEligible: true,
       tutorialCompleted: false,
+      createdAt: FieldValue.serverTimestamp(),
     });
   });
 
@@ -598,22 +613,20 @@ export const cleanupDeletedUser =
         typeof rawLrn === "string" &&
         /^\d{12}$/.test(rawLrn.trim())
       ) {
-        const lrnRef =
-          db
-            .collection("lrnIndexes")
-            .doc(
-              lrnIndexId(
-                rawLrn.trim(),
-              ),
-            );
+        const normalizedLrn = rawLrn.trim();
+        const lrnCollection = db.collection("lrnIndexes");
+        const lrnRefs = [
+          lrnCollection.doc(lrnIndexId(normalizedLrn)),
+          lrnCollection.doc(normalizedLrn),
+        ];
+        const lrnSnapshots = await Promise.all(
+          lrnRefs.map((reference) => reference.get()),
+        );
 
-        const lrnSnapshot =
-          await lrnRef.get();
-
-        if (
-          lrnSnapshot.data()?.uid === uid
-        ) {
-          batch.delete(lrnRef);
+        for (const [index, snapshot] of lrnSnapshots.entries()) {
+          if (snapshot.data()?.uid === uid) {
+            batch.delete(lrnRefs[index]);
+          }
         }
       }
 

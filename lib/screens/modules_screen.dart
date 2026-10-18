@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/user_progress_service.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/math_background.dart';
 import '../worksheet_lesson_data.dart';
@@ -14,6 +15,8 @@ class ModulesScreen extends StatefulWidget {
 class _ModulesScreenState extends State<ModulesScreen> {
   // Click protection flag
   bool _isProcessingClick = false;
+  bool _isLoadingProgress = true;
+  UserProgress? _progress;
 
   final List<Map<String, String>> modules = List.generate(
     worksheetModuleIds.length,
@@ -47,9 +50,50 @@ class _ModulesScreenState extends State<ModulesScreen> {
     growable: false,
   );
 
-  void _selectModule(Map<String, String> module) {
+  @override
+  void initState() {
+    super.initState();
+    _loadProgress();
+  }
+
+  Future<void> _loadProgress() async {
+    try {
+      final progress = await UserProgressService.getCurrentUserProgress(
+        forceRefresh: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _progress = progress;
+        _isLoadingProgress = false;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('Unable to load module unlock progress: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _progress = null;
+        _isLoadingProgress = false;
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content:
+                Text('Could not load module progress. Only Module 1 is available.'),
+          ),
+        );
+      });
+    }
+  }
+
+  bool _canOpenModule(int index) =>
+      index == 0 ||
+      (!_isLoadingProgress &&
+          (_progress?.isWorksheetModuleUnlocked(index + 1) ?? false));
+
+  void _selectModule(Map<String, String> module, int index) {
     // Prevent multiple rapid clicks
-    if (_isProcessingClick) return;
+    if (_isProcessingClick || !_canOpenModule(index)) return;
 
     _isProcessingClick = true;
 
@@ -61,6 +105,7 @@ class _ModulesScreenState extends State<ModulesScreen> {
     ).whenComplete(() {
       if (mounted) {
         _isProcessingClick = false;
+        _loadProgress();
       }
     });
   }
@@ -139,13 +184,24 @@ class _ModulesScreenState extends State<ModulesScreen> {
                     itemCount: modules.length,
                     itemBuilder: (context, index) {
                       final module = modules[index];
+                      final isUnlocked = _canOpenModule(index);
+                      final unlockLabel = _progress?.worksheetModuleUnlockLabel(
+                            index + 1,
+                          ) ??
+                          UserProgress.worksheetModuleRequirementLabel(
+                            index + 1,
+                          );
                       return GestureDetector(
-                        onTap: () => _selectModule(module),
+                        onTap: isUnlocked
+                            ? () => _selectModule(module, index)
+                            : null,
                         child: Container(
                           margin: const EdgeInsets.only(bottom: 15),
                           padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF3D5AA),
+                            color: isUnlocked
+                                ? const Color(0xFFF3D5AA)
+                                : Colors.grey[300],
                             borderRadius: BorderRadius.circular(20),
                             boxShadow: [
                               BoxShadow(
@@ -189,7 +245,9 @@ class _ModulesScreenState extends State<ModulesScreen> {
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                          module['description']!,
+                                          isUnlocked
+                                              ? module['description']!
+                                              : 'Locked — complete the required levels to unlock.',
                                           style: const TextStyle(
                                             fontSize: 13,
                                             color: Color(0xFF6B7280),
@@ -216,12 +274,32 @@ class _ModulesScreenState extends State<ModulesScreen> {
                                       ],
                                     ),
                                   ),
-                                  const Icon(
-                                    Icons.arrow_forward,
-                                    color: Color(0xFF2B3B5A),
+                                  Icon(
+                                    isUnlocked
+                                        ? Icons.arrow_forward
+                                        : Icons.lock,
+                                    color: const Color(0xFF2B3B5A),
                                     size: 20,
                                   ),
                                 ],
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(left: 44, top: 8),
+                                child: Text(
+                                  unlockLabel,
+                                  key: ValueKey(
+                                    'module-unlock-label-${index + 1}',
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  softWrap: true,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF725A41),
+                                  ),
+                                ),
                               ),
                             ],
                           ),

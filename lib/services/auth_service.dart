@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -104,11 +105,26 @@ class AuthService {
     required String lrn,
     required String character,
   }) async {
+    final normalizedLrn = lrn.trim();
+    if (!RegExp(r'^\d{12}$').hasMatch(normalizedLrn)) {
+      throw ArgumentError('LRN must contain exactly 12 digits.');
+    }
+
     final normalizedEmail = email.trim().toLowerCase();
-    final credential = await _auth.createUserWithEmailAndPassword(
-      email: normalizedEmail,
-      password: password,
-    );
+    UserCredential credential;
+    try {
+      credential = await _auth.createUserWithEmailAndPassword(
+        email: normalizedEmail,
+        password: password,
+      );
+    } on FirebaseAuthException catch (error) {
+      if (error.code != 'email-already-in-use') rethrow;
+      credential = await _auth.signInWithEmailAndPassword(
+        email: normalizedEmail,
+        password: password,
+      );
+    }
+
     final authUser = credential.user!;
     final account = UserAccount(
       uid: authUser.uid,
@@ -117,21 +133,16 @@ class AuthService {
       status: 'pending',
       name: name,
       address: address,
-      lrn: lrn,
+      lrn: normalizedLrn,
       character: character,
     );
     try {
-      final batch = FirebaseFirestore.instance.batch();
-      final userData = account.toJson()
-        ..['tutorialEligible'] = true
-        ..['tutorialCompleted'] = false;
-      batch.set(_users.doc(authUser.uid), userData);
-      batch.set(FirebaseFirestore.instance.collection('lrnIndexes').doc(lrn), {
-        'uid': authUser.uid,
-        'lrn': lrn,
-        'createdAt': FieldValue.serverTimestamp(),
+      await FirebaseFunctions.instance.httpsCallable('registerStudent').call({
+        'lrn': normalizedLrn,
+        'name': name.trim(),
+        'address': address.trim(),
+        'character': character,
       });
-      await batch.commit();
 
       try {
         await LeaderboardService.createRegistrationEntry(
@@ -143,12 +154,19 @@ class AuthService {
             'Unable to initialize pending student leaderboard entry: $error');
         debugPrintStack(stackTrace: stackTrace);
       }
-    } catch (error) {
-      try {
-        await authUser.delete();
-      } catch (cleanupError, stackTrace) {
-        debugPrint('Unable to clean up rejected registration: $cleanupError');
-        debugPrintStack(stackTrace: stackTrace);
+    } on FirebaseFunctionsException catch (error) {
+      final duplicateLrn = error.code == 'already-exists' &&
+          (error.message?.toLowerCase().contains('lrn') ?? false);
+      if (duplicateLrn) {
+        try {
+          await authUser.delete();
+        } catch (cleanupError, stackTrace) {
+          debugPrint('Unable to clean up rejected registration: $cleanupError');
+          debugPrintStack(stackTrace: stackTrace);
+          throw StateError(
+            'The LRN is already registered, and the temporary account could not be removed. Contact an administrator.',
+          );
+        }
       }
       rethrow;
     } finally {

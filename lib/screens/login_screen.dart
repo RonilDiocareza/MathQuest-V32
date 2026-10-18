@@ -6,8 +6,7 @@ import '../services/auth_service.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/custom_textfield.dart';
 import '../widgets/math_background.dart';
-import 'admin_dashboard_screen.dart';
-import 'home_screen.dart';
+import 'landing_screen.dart';
 import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -54,15 +53,12 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.setString('current_user_address', account.address);
 
         if (mounted) {
-          if (account.isAdmin) {
-            Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const AdminDashboardScreen()));
-          } else {
-            Navigator.pushReplacement(
-                context, MaterialPageRoute(builder: (_) => const HomeScreen()));
-          }
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => LandingScreen(isAdmin: account.isAdmin),
+            ),
+          );
         }
       } catch (error) {
         debugPrint('Unable to sign in: $error');

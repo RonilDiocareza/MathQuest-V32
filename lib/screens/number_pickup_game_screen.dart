@@ -53,6 +53,7 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
   bool _isGameModeIntroInProgress = false;
   bool _hasPromptedGameModeIntro = false;
   bool _showGameModeIntroOverlay = false;
+  late Future<void> _progressRestoration;
   late Future<void> _orientationChange;
   late Future<void> _musicInitialization;
 
@@ -66,7 +67,8 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
     currentCorrectAnswer = widget.correctAnswer;
     gameInstance = _createGame();
     gameInstance.pauseWorld();
-    _restoreCompletedGameModeScore();
+    _progressRestoration = _restoreCompletedGameModeScore();
+    unawaited(_progressRestoration);
     unawaited(_checkFirstTimeGameModeIntro());
   }
 
@@ -98,9 +100,10 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
   }
 
   List<FirstTimeTutorialStep> get _gameModeTutorialSteps {
-    final userName = AuthService.currentUser?.displayName?.trim().isNotEmpty == true
-        ? AuthService.currentUser!.displayName!
-        : AuthService.currentUser?.email?.split('@').first ?? 'Player';
+    final userName =
+        AuthService.currentUser?.displayName?.trim().isNotEmpty == true
+            ? AuthService.currentUser!.displayName!
+            : AuthService.currentUser?.email?.split('@').first ?? 'Player';
     final currentLevelQuestion = NpcQuestion.forLevel(1, currentLevel);
     final sampleQuestion = NpcQuestion.forLevel(
       currentLevel > 1 ? currentLevel.clamp(1, NpcQuestion.all.length) : 1,
@@ -112,31 +115,26 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
         title: 'Welcome to Game Mode, $userName!',
         message:
             'I’m your guide for this level. Today we will practice ${currentLevelQuestion.topic.toLowerCase()} and learn how to solve the questions you will meet in this game mode.',
-        guideAssetPath: 'assets/images/npcs/guide1.png',
       ),
       FirstTimeTutorialStep(
         title: 'What this game mode teaches',
         message:
             'This challenge focuses on ${currentLevelQuestion.lesson}. In this game mode, you will answer NPC math questions and then collect the number that matches the correct answer. The goal is to solve the problem, not just move around the map.',
-        guideAssetPath: 'assets/images/npcs/guide2.png',
       ),
       FirstTimeTutorialStep(
         title: 'Example: solve the question',
         message:
             'Look at this actual question from the game: "$examplePrompt". First identify the operation, then calculate carefully. Use the same method you would use on your worksheet: simplify when needed, check your work, and choose the answer that matches the final result.',
-        guideAssetPath: 'assets/images/npcs/guide2.png',
       ),
       FirstTimeTutorialStep(
         title: 'How to play',
         message:
             'Talk to each NPC, answer the question correctly, and then collect the matching number in the level. Every correct NPC answer and correctly collected number gives 10 points. If you answer incorrectly, you lose one heart. You have three hearts in total.',
-        guideAssetPath: 'assets/images/npcs/guide2.png',
       ),
       FirstTimeTutorialStep(
         title: 'Points and leaderboard',
         message:
             'Your points are added to the leaderboard. The more correct answers and numbers you collect, the higher your rank becomes. The Help button on the right side of the screen can reopen these instructions at any time.',
-        guideAssetPath: 'assets/images/npcs/guide2.png',
       ),
     ];
     return guidanceSteps;
@@ -152,7 +150,8 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
     }
 
     try {
-      final shouldShow = await UserProgressService.shouldShowGameModeIntroduction(
+      final shouldShow =
+          await UserProgressService.shouldShowGameModeIntroduction(
         uid: user.uid,
       );
       if (!mounted || !shouldShow) {
@@ -163,6 +162,13 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
       }
 
       if (!mounted) return;
+      await _progressRestoration;
+      if (!mounted) return;
+      if (levelCompleted) {
+        setState(() => _hasPromptedGameModeIntro = true);
+        return;
+      }
+      gameInstance.resumeWorld();
       setState(() {
         _hasPromptedGameModeIntro = true;
         _isGameModeIntroInProgress = true;
@@ -900,6 +906,8 @@ class _NumberPickupGameScreenState extends State<NumberPickupGameScreen> {
                           child: FirstTimeTutorialOverlay(
                             steps: _gameModeTutorialSteps,
                             onComplete: _completeGameModeIntro,
+                            gameModeLayout: true,
+                            typewriterText: true,
                           ),
                         ),
                     ],

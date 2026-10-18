@@ -7,12 +7,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class UserProgress {
   static const int npcQuestionCount = 6;
+  static const Map<int, List<int>> worksheetModuleRequiredCompletions = {
+    2: [8],
+    3: [15],
+    4: [20],
+    5: [25],
+    6: [30],
+    7: [35],
+    8: [41, 42],
+  };
 
   final List<int> completedLevels;
   final List<int> completedNpcQuestions;
   final Map<int, List<int>> completedNpcQuestionsByLevel;
   final int unlockedLevels;
   final int questAttempts;
+  final Map<String, int> classroomQuestCompletionTimes;
+  final Map<String, Map<String, dynamic>> classroomQuestResults;
   final Map<int, int> maxUnlockedSubLevel;
   final Map<int, LevelQuestionAnswer> levelQuestionAnswers;
   final Map<int, int> gameModeFinalScores;
@@ -24,6 +35,8 @@ class UserProgress {
     required this.unlockedLevels,
     required this.questAttempts,
     required this.maxUnlockedSubLevel,
+    this.classroomQuestCompletionTimes = const {},
+    this.classroomQuestResults = const {},
     this.levelQuestionAnswers = const {},
     this.gameModeFinalScores = const {},
   });
@@ -89,6 +102,40 @@ class UserProgress {
 
   int get highestCompletedLevel =>
       completedLevels.isEmpty ? 0 : completedLevels.reduce(max);
+
+  bool isWorksheetModuleUnlocked(int moduleNumber) {
+    if (moduleNumber < 1 || moduleNumber > 8) return false;
+    if (moduleNumber == 1) return true;
+
+    for (var module = 2; module <= moduleNumber; module++) {
+      if (!worksheetModuleRequiredCompletions[module]!
+          .every(completedLevels.contains)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  String worksheetModuleUnlockLabel(int moduleNumber) {
+    if (isWorksheetModuleUnlocked(moduleNumber)) return 'Unlocked';
+    return worksheetModuleRequirementLabel(moduleNumber);
+  }
+
+  static String worksheetModuleRequirementLabel(int moduleNumber) {
+    final requiredLevels = worksheetModuleRequiredCompletions[moduleNumber];
+    if (requiredLevels == null) return 'Unlocked';
+
+    final labels = requiredLevels.map((globalLevel) {
+      final difficulty = ((globalLevel - 1) ~/ 20) + 1;
+      final levelInDifficulty = ((globalLevel - 1) % 20) + 1;
+      return (difficulty == 1
+              ? 'Level $levelInDifficulty'
+              : 'Level $levelInDifficulty – Difficulty $difficulty');
+    }).toList(growable: false);
+    if (labels.length == 1) return 'Complete ${labels.single}';
+    return 'Complete ${labels.sublist(0, labels.length - 1).join(', ')} '
+        'and ${labels.last}';
+  }
 }
 
 class LevelQuestionAnswer {
@@ -152,6 +199,8 @@ class LevelQuestionCompletion {
 }
 
 class UserProgressService {
+  static const String classroomQuestId = 'classroom_quest';
+
   static FirebaseAuth? get _authOrNull {
     try {
       return FirebaseAuth.instance;
@@ -223,6 +272,11 @@ class UserProgressService {
     }
     final rawSublevels =
         progress['maxUnlockedSubLevel'] as Map<String, dynamic>? ?? {};
+    final rawClassroomQuestCompletionTimes =
+        progress['classroomQuestCompletionTimes'] as Map<String, dynamic>? ??
+            {};
+    final rawClassroomQuestResults =
+        progress['classroomQuestResults'] as Map<String, dynamic>? ?? {};
     final rawLevelQuestionAnswers =
         progress['levelQuestionAnswers'] as Map<String, dynamic>? ?? {};
     final rawGameModeFinalScores =
@@ -233,6 +287,16 @@ class UserProgressService {
       completedNpcQuestionsByLevel: completedNpcQuestionsByLevel,
       unlockedLevels: (progress['unlockedLevels'] as num?)?.toInt() ?? 1,
       questAttempts: (progress['questAttempts'] as num?)?.toInt() ?? 0,
+      classroomQuestCompletionTimes: {
+        for (final entry in rawClassroomQuestCompletionTimes.entries)
+          if (entry.value is num && (entry.value as num) >= 0)
+            entry.key: (entry.value as num).toInt(),
+      },
+      classroomQuestResults: {
+        for (final entry in rawClassroomQuestResults.entries)
+          if (entry.value is Map<String, dynamic>)
+            entry.key: Map<String, dynamic>.from(entry.value as Map),
+      },
       maxUnlockedSubLevel: {
         1: (rawSublevels['1'] as num?)?.toInt() ?? 1,
         2: (rawSublevels['2'] as num?)?.toInt() ?? 1,
@@ -267,9 +331,12 @@ class UserProgressService {
         : _fromData(snapshot.docs.first.data());
   }
 
-  static Future<UserProgress> getCurrentUserProgress() {
+  static Future<UserProgress> getCurrentUserProgress(
+      {bool forceRefresh = false}) {
     final uid = _uid();
-    if (_cachedCurrentUid != uid || _cachedCurrentProgress == null) {
+    if (forceRefresh ||
+        _cachedCurrentUid != uid ||
+        _cachedCurrentProgress == null) {
       _cachedCurrentUid = uid;
       _cachedCurrentProgress = getProgressForUid(uid).then<UserProgress>(
         (progress) => progress,
@@ -595,6 +662,53 @@ class UserProgressService {
     await userRef.set({
       'progress': {'questAttempts': FieldValue.increment(1)},
     }, SetOptions(merge: true));
+    _invalidateCurrentProgressCache();
+  }
+
+  static Future<void> saveClassroomQuestCompletion({
+    required int completionTimeSeconds,
+    required int correctAnswers,
+    required int totalQuestions,
+  }) async {
+    if (completionTimeSeconds < 1) {
+      throw ArgumentError.value(completionTimeSeconds, 'completionTimeSeconds');
+    }
+    if (totalQuestions < 1 ||
+        correctAnswers != totalQuestions ||
+        correctAnswers > 60) {
+      throw ArgumentError(
+        'A completed Classroom Quest must have all questions correct.',
+      );
+    }
+
+    final userRef = _users.doc(_uid());
+    await FirebaseFirestore.instance.runTransaction<void>((transaction) async {
+      final snapshot = await transaction.get(userRef);
+      if (!snapshot.exists) {
+        throw StateError('The user progress document does not exist.');
+      }
+      final data = snapshot.data() ?? {};
+      final progress = data['progress'] as Map<String, dynamic>? ?? {};
+      final results = Map<String, dynamic>.from(
+          progress['classroomQuestResults'] as Map? ?? {});
+      if (results.containsKey(classroomQuestId)) return;
+
+      final completionTimes = Map<String, dynamic>.from(
+        progress['classroomQuestCompletionTimes'] as Map? ?? {},
+      )..[classroomQuestId] = completionTimeSeconds;
+      results[classroomQuestId] = {
+        'status': 'completed',
+        'completionTimeSeconds': completionTimeSeconds,
+        'score': correctAnswers * 10,
+        'correctAnswers': correctAnswers,
+        'totalQuestions': totalQuestions,
+        'completedAt': FieldValue.serverTimestamp(),
+      };
+      transaction.update(userRef, {
+        'progress.classroomQuestCompletionTimes': completionTimes,
+        'progress.classroomQuestResults': results,
+      });
+    });
     _invalidateCurrentProgressCache();
   }
 }

@@ -6,12 +6,14 @@ class LeaderboardEntry {
   final String displayName;
   final int totalScore;
   final int highestCompletedLevel;
+  final DateTime? createdAt;
 
   const LeaderboardEntry({
     required this.uid,
     required this.displayName,
     required this.totalScore,
     this.highestCompletedLevel = 0,
+    this.createdAt,
   });
 }
 
@@ -63,7 +65,20 @@ class LeaderboardService {
     final sortedEntries = entries.toList()
       ..sort((first, second) {
         final scoreOrder = second.totalScore.compareTo(first.totalScore);
-        return scoreOrder != 0 ? scoreOrder : first.uid.compareTo(second.uid);
+        if (scoreOrder != 0) return scoreOrder;
+
+        final firstCreatedAt = first.createdAt;
+        final secondCreatedAt = second.createdAt;
+        if (firstCreatedAt != null && secondCreatedAt != null) {
+          final creationOrder = firstCreatedAt.compareTo(secondCreatedAt);
+          if (creationOrder != 0) return creationOrder;
+        } else if (firstCreatedAt == null && secondCreatedAt != null) {
+          return -1;
+        } else if (firstCreatedAt != null && secondCreatedAt == null) {
+          return 1;
+        }
+
+        return first.uid.compareTo(second.uid);
       });
     return sortedEntries;
   }
@@ -117,7 +132,15 @@ class LeaderboardService {
       totalScore: totalScore,
       highestCompletedLevel:
           (data['highestCompletedLevel'] as num?)?.toInt() ?? 0,
+      createdAt: _dateTimeFromValue(data['createdAt']),
     );
+  }
+
+  static DateTime? _dateTimeFromValue(Object? value) {
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    return null;
   }
 
   static int _progressScore(Map<String, dynamic> userData) {
@@ -175,11 +198,42 @@ class LeaderboardService {
     required String uid,
     required String displayName,
   }) async {
-    await _collection.doc(uid).set({
-      'uid': uid,
-      'displayName': displayName,
-      'totalScore': 0,
-      'updatedAt': FieldValue.serverTimestamp(),
+    final firestore = _firestoreOrNull ??
+        (throw StateError(
+          'Firebase Firestore is not available because Firebase is not initialized.',
+        ));
+    final userRef = firestore.collection('users').doc(uid);
+    final leaderboardRef = _collection.doc(uid);
+    await firestore.runTransaction((transaction) async {
+      final userSnapshot = await transaction.get(userRef);
+      if (!userSnapshot.exists) {
+        throw StateError('User profile not found.');
+      }
+      final userData = userSnapshot.data();
+      if (userData == null ||
+          userData['role']?.toString().toLowerCase() != 'student') {
+        throw StateError('Only student accounts can join the leaderboard.');
+      }
+
+      final leaderboardSnapshot = await transaction.get(leaderboardRef);
+      if (leaderboardSnapshot.exists) {
+        final entryData = leaderboardSnapshot.data();
+        if (entryData != null && entryData['createdAt'] == null) {
+          transaction.update(leaderboardRef, {
+            'createdAt': userData['createdAt'] ?? FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        return;
+      }
+
+      transaction.set(leaderboardRef, {
+        'uid': uid,
+        'displayName': (userData['name'] ?? displayName).toString(),
+        'totalScore': 0,
+        'createdAt': userData['createdAt'] ?? FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -214,6 +268,7 @@ class LeaderboardService {
         'uid': user.uid,
         'displayName': (userData['name'] ?? 'Player').toString(),
         'totalScore': 0,
+        'createdAt': userData['createdAt'] ?? FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
     });
@@ -246,12 +301,24 @@ class LeaderboardService {
           studentData?['status']?.toString().toLowerCase() != 'approved') {
         throw StateError('Student account is not approved.');
       }
-      if (leaderboardSnapshot.exists) return;
+      if (leaderboardSnapshot.exists) {
+        final entryData = leaderboardSnapshot.data();
+        if (entryData != null && entryData['createdAt'] == null) {
+          transaction.update(leaderboardRef, {
+            'createdAt':
+                studentData?['createdAt'] ?? FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        return;
+      }
 
       transaction.set(leaderboardRef, {
         'uid': uid,
         'displayName': (studentData?['name'] ?? 'Player').toString(),
         'totalScore': 0,
+        'createdAt':
+            studentData?['createdAt'] ?? FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       });
     });
@@ -321,6 +388,8 @@ class LeaderboardService {
               'uid': user.uid,
               'displayName': displayName,
               'totalScore': points,
+              'createdAt':
+                  userData['createdAt'] ?? FieldValue.serverTimestamp(),
               'updatedAt': FieldValue.serverTimestamp(),
             },
           );
@@ -349,6 +418,9 @@ class LeaderboardService {
             'uid': user.uid,
             'displayName': displayName,
             'totalScore': oldScore + points,
+            'createdAt': existingData['createdAt'] ??
+                userData['createdAt'] ??
+                FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
           },
         );
@@ -416,6 +488,7 @@ class LeaderboardService {
     final leaderboardSnapshot = await _collection.get();
 
     final existingScores = <String, int>{};
+    final existingCreationTimes = <String, Object?>{};
 
     for (final document in leaderboardSnapshot.docs) {
       final data = document.data();
@@ -433,6 +506,7 @@ class LeaderboardService {
       }
 
       existingScores[document.id] = score;
+      existingCreationTimes[document.id] = data['createdAt'];
     }
 
     final students = usersSnapshot.docs.where(
@@ -473,6 +547,9 @@ class LeaderboardService {
             'displayName': displayName,
             'totalScore': score,
             'highestCompletedLevel': highestCompletedLevel,
+            'createdAt': data['createdAt'] ??
+                existingCreationTimes[uid] ??
+                FieldValue.serverTimestamp(),
             'updatedAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),

@@ -19,8 +19,15 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
   final GlobalKey _answerFieldKey = GlobalKey();
   double _answerFieldOffset = 0;
   Timer? _timer;
+  late final DateTime _completionStartedAt;
+  int _timerGeneration = 0;
   int _remainingSeconds = 60;
   int _attempts = 0;
+  int _correctAnswers = 0;
+  int? _pendingCompletionSeconds;
+  bool _isCheckingAnswer = false;
+  bool _isSavingCompletion = false;
+  bool _completionSaveFailed = false;
   bool _isSubmitted = false;
   bool _isTimeUp = false;
   bool _isTimeoutDialogShowing = false;
@@ -53,21 +60,31 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
   void initState() {
     super.initState();
     _answerController = TextEditingController();
-    _startTimer();
+    _completionStartedAt = DateTime.now();
+    _startQuestionTimer();
   }
 
   @override
   void dispose() {
+    _timerGeneration++;
     _timer?.cancel();
     _answerController.dispose();
     super.dispose();
   }
 
-  void _startTimer() {
+  void _startQuestionTimer({bool restartAttempt = false}) {
+    _timerGeneration++;
     _timer?.cancel();
+    _timer = null;
+    final timerGeneration = _timerGeneration;
     setState(() {
+      if (restartAttempt) {
+        _currentLevel = 0;
+        _correctAnswers = 0;
+      }
       _remainingSeconds = _totalTime;
       _attempts = 0;
+      _isCheckingAnswer = false;
       _isSubmitted = false;
       _isTimeUp = false;
       _feedbackMessage = null;
@@ -75,23 +92,38 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
     });
 
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (_remainingSeconds <= 1) {
+      if (!mounted || timerGeneration != _timerGeneration) {
         timer.cancel();
-        if (mounted && !_isTimeUp && !_isTimeoutDialogShowing) {
-          setState(() {
-            _remainingSeconds = 0;
-            _isTimeUp = true;
-          });
-          unawaited(_showTimeUpDialog());
-        }
         return;
       }
-      if (mounted) {
+
+      if (_remainingSeconds <= 1) {
+        timer.cancel();
+        _timer = null;
+        _timerGeneration++;
+        if (_isTimeUp || _isSubmitted || _isTimeoutDialogShowing) return;
         setState(() {
-          _remainingSeconds -= 1;
+          _currentLevel = 0;
+          _remainingSeconds = 0;
+          _attempts = 0;
+          _correctAnswers = 0;
+          _isCheckingAnswer = false;
+          _isTimeUp = true;
+          _feedbackMessage = null;
+          _answerController.clear();
         });
+        unawaited(_showTimeUpDialog());
+        return;
       }
+
+      setState(() => _remainingSeconds -= 1);
     });
+  }
+
+  void _cancelQuestionTimer() {
+    _timerGeneration++;
+    _timer?.cancel();
+    _timer = null;
   }
 
   Future<void> _showTimeUpDialog() async {
@@ -109,7 +141,7 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
               TextButton(
                 onPressed: () {
                   Navigator.pop(dialogContext);
-                  _startTimer();
+                  _startQuestionTimer(restartAttempt: true);
                 },
                 child: const Text('Try Again'),
               ),
@@ -129,8 +161,12 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
     }
   }
 
-  void _submitAnswer() {
-    if (_isTimeUp || _isSubmitted) {
+  Future<void> _submitAnswer() async {
+    if (_isTimeUp ||
+        _isSubmitted ||
+        _isCheckingAnswer ||
+        _isSavingCompletion ||
+        _completionSaveFailed) {
       return;
     }
 
@@ -156,31 +192,29 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
     }
 
     setState(() {
+      _isCheckingAnswer = true;
       _attempts += 1;
     });
-
-    // Save attempt to SharedPreferences
-    _saveAttempt();
+    unawaited(_saveAttempt());
 
     final correctAnswer = _parseFraction(_currentProblem['answer'] as String)!;
     if (userAnswer == correctAnswer) {
-      _timer?.cancel();
+      _correctAnswers++;
       if (_isLastLevel) {
+        _cancelQuestionTimer();
+        final elapsedMilliseconds =
+            DateTime.now().difference(_completionStartedAt).inMilliseconds;
+        final elapsedSeconds = (elapsedMilliseconds + 999) ~/ 1000;
+        _pendingCompletionSeconds = elapsedSeconds < 1 ? 1 : elapsedSeconds;
         setState(() {
-          _isSubmitted = true;
-          _feedbackMessage =
-              'Great job! You completed all levels in $_attempts attempt(s).';
+          _isCheckingAnswer = false;
+          _feedbackMessage = 'Saving your Classroom Quest completion...';
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('All levels complete! Attempts: $_attempts'),
-            backgroundColor: Colors.green,
-          ),
-        );
+        await _saveCompletion();
       } else {
         setState(() {
           _currentLevel += 1;
+          _isCheckingAnswer = false;
           _feedbackMessage = 'Correct! Starting level ${_currentLevel + 1}.';
           _answerController.clear();
           _isSubmitted = false;
@@ -196,10 +230,11 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
           ),
         );
 
-        _startTimer();
+        _startQuestionTimer();
       }
     } else {
       setState(() {
+        _isCheckingAnswer = false;
         _feedbackMessage = 'Wrong answer. Attempts: $_attempts';
       });
 
@@ -212,8 +247,70 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
     }
   }
 
+  Future<void> _saveCompletion() async {
+    if (_pendingCompletionSeconds == null ||
+        _isSavingCompletion ||
+        _isSubmitted) {
+      return;
+    }
+    setState(() {
+      _isSavingCompletion = true;
+      _completionSaveFailed = false;
+    });
+    try {
+      await UserProgressService.saveClassroomQuestCompletion(
+        completionTimeSeconds: _pendingCompletionSeconds!,
+        correctAnswers: _correctAnswers,
+        totalQuestions: _levels.length,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isSavingCompletion = false;
+        _completionSaveFailed = false;
+        _isSubmitted = true;
+        _feedbackMessage =
+            'Great job! You completed all levels in ${_formatTime(_pendingCompletionSeconds!)}.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Classroom Quest completion saved.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Unable to save Classroom Quest completion: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _isSavingCompletion = false;
+        _completionSaveFailed = true;
+        _feedbackMessage = 'Your completion could not be saved. Please retry.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not save your Classroom Quest result. Tap Retry Save to try again.',
+          ),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _saveAttempt() async {
-    await UserProgressService.incrementQuestAttempts();
+    try {
+      await UserProgressService.incrementQuestAttempts();
+    } catch (error, stackTrace) {
+      debugPrint('Unable to save Classroom Quest attempt: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not save your attempt to My Progress.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   (int, int)? _parseFraction(String value) {
@@ -490,7 +587,10 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
                                   keyboardType: TextInputType.text,
                                   height: 60,
                                   width: 200,
-                                  enabled: !_isTimeUp && !_isSubmitted,
+                                  enabled: !_isTimeUp &&
+                                      !_isSubmitted &&
+                                      !_isSavingCompletion &&
+                                      !_completionSaveFailed,
                                 ),
                               ),
                             ),
@@ -503,10 +603,19 @@ class _ClassroomQuestScreenState extends State<ClassroomQuestScreen> {
                                 child: CustomButton(
                                   text: _isSubmitted
                                       ? '✅ Submitted!'
-                                      : 'Submit Answer',
-                                  onPressed: (_isSubmitted || _isTimeUp)
+                                      : _completionSaveFailed
+                                          ? 'Retry Save'
+                                          : _isSavingCompletion
+                                              ? 'Saving...'
+                                              : 'Submit Answer',
+                                  onPressed: _isSubmitted ||
+                                          _isTimeUp ||
+                                          _isCheckingAnswer ||
+                                          _isSavingCompletion
                                       ? null
-                                      : _submitAnswer,
+                                      : _completionSaveFailed
+                                          ? _saveCompletion
+                                          : _submitAnswer,
                                 ),
                               ),
                             ),

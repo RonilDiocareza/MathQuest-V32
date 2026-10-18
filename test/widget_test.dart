@@ -89,6 +89,86 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Help popup auto-hides after 20 seconds and icon opens help',
+      (WidgetTester tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+
+    for (final size in [const Size(320, 568), const Size(1510, 768)]) {
+      tester.view.physicalSize = size;
+      await tester.pumpWidget(
+        MaterialApp(home: HomeScreen(key: ValueKey(size))),
+      );
+      await tester.pumpAndSettle();
+
+      final iconFinder = find.byIcon(Icons.question_mark_rounded);
+      final iconBefore = tester.getRect(iconFinder);
+      final popupFinder = find.text('Need Help?');
+      expect(popupFinder, findsOneWidget);
+      var popupAnimation = find.ancestor(
+        of: popupFinder,
+        matching: find.byType(AnimatedOpacity),
+      );
+      expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 1);
+      final popup = tester.getRect(popupFinder);
+      expect(popup.right, lessThan(iconBefore.left));
+      expect(popup.left, greaterThanOrEqualTo(0));
+      expect(popup.right, lessThanOrEqualTo(size.width));
+      expect(popup.top, greaterThanOrEqualTo(0));
+      expect(popup.bottom, lessThanOrEqualTo(size.height));
+
+      await tester.pump(const Duration(seconds: 20));
+      await tester.pump(const Duration(milliseconds: 200));
+      popupAnimation = find.ancestor(
+        of: popupFinder,
+        matching: find.byType(AnimatedOpacity),
+      );
+      expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 0);
+      expect(tester.getRect(iconFinder), iconBefore);
+
+      await tester.tap(iconFinder);
+      await tester.pumpAndSettle();
+      expect(find.text('Welcome to MathQuest!'), findsOneWidget);
+      popupAnimation = find.ancestor(
+        of: popupFinder,
+        matching: find.byType(AnimatedOpacity),
+      );
+      expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 0);
+      expect(tester.takeException(), isNull);
+    }
+  });
+
+  testWidgets('Help popup timer restarts when returning to Home',
+      (WidgetTester tester) async {
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(430, 852);
+
+    await tester.pumpWidget(const MaterialApp(home: HomeScreen()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('home-menu-Module')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Back'));
+    await tester.pumpAndSettle();
+
+    final popupFinder = find.text('Need Help?');
+    final popupAnimation = find.ancestor(
+      of: popupFinder,
+      matching: find.byType(AnimatedOpacity),
+    );
+    expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 1);
+
+    await tester.pump(const Duration(seconds: 19));
+    expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 1);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(tester.widget<AnimatedOpacity>(popupAnimation.first).opacity, 0);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Home menu opens a screen without a route animation delay',
       (WidgetTester tester) async {
     addTearDown(tester.view.resetPhysicalSize);
@@ -158,6 +238,44 @@ void main() {
     }
 
     expect(game.isGameLoaded, isTrue);
+    expect(game.startPosition.x, closeTo(570, 0.1));
+    expect(game.startPosition.y, closeTo(620, 0.1));
+    expect(game.player.position, game.startPosition);
+    final playerFeet = game.startPosition + Vector2(0, 21);
+    expect(
+      game.canPlayerMoveTo(
+        playerFeet,
+        MathWorldGame.playerFeetCollisionRadius,
+      ),
+      isTrue,
+    );
+    for (final offset in [
+      Vector2(16, 0),
+      Vector2(-16, 0),
+      Vector2(0, 16),
+      Vector2(0, -16),
+    ]) {
+      expect(
+        game.canPlayerMoveTo(
+          playerFeet + offset,
+          MathWorldGame.playerFeetCollisionRadius,
+        ),
+        isTrue,
+      );
+    }
+    game.startMoveRight();
+    game.update(0.25);
+    game.stopMove();
+    expect(game.player.position.x, greaterThan(game.startPosition.x));
+    final npc4 = game.npcPlacements
+        .firstWhere((placement) => placement.questionNumber == 4);
+    final npc4CollisionCenter =
+        npc4.position - Vector2(0, npc4.collisionRadius);
+    expect(
+      npc4CollisionCenter.distanceTo(playerFeet),
+      greaterThan(
+          npc4.collisionRadius + MathWorldGame.playerFeetCollisionRadius + 60),
+    );
     expect(
       game.camera.viewfinder.zoom,
       closeTo(

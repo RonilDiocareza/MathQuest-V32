@@ -1,17 +1,108 @@
 import 'package:flutter/material.dart';
+import '../services/user_progress_service.dart';
 import '../widgets/custom_button.dart';
 import '../widgets/math_background.dart';
 import '../worksheet_lesson_data.dart';
 
-class ModuleLessonScreen extends StatelessWidget {
+class ModuleLessonScreen extends StatefulWidget {
   final Map<String, String> module;
 
   const ModuleLessonScreen({super.key, required this.module});
 
   @override
+  State<ModuleLessonScreen> createState() => _ModuleLessonScreenState();
+}
+
+class _ModuleLessonScreenState extends State<ModuleLessonScreen> {
+  bool _isCheckingAccess = true;
+  bool _isUnlocked = false;
+  bool _accessCheckFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final moduleId = widget.module['id'];
+    final moduleIndex =
+        moduleId == null ? -1 : worksheetModuleIds.indexOf(moduleId);
+    if (moduleIndex == 0) {
+      _isCheckingAccess = false;
+      _isUnlocked = true;
+    } else if (moduleIndex < 0) {
+      _isCheckingAccess = false;
+    } else {
+      _verifyAccess(moduleIndex);
+    }
+  }
+
+  Future<void> _verifyAccess(int moduleIndex) async {
+    try {
+      final progress = await UserProgressService.getCurrentUserProgress(
+        forceRefresh: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _isUnlocked = progress.isWorksheetModuleUnlocked(moduleIndex + 1);
+        _isCheckingAccess = false;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('Unable to verify module access: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _accessCheckFailed = true;
+        _isCheckingAccess = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    if (_isCheckingAccess) {
+      return Scaffold(
+        body: MathBackground(
+          child: SafeArea(
+            child: Center(
+              child: CircularProgressIndicator(),
+            ),
+          ),
+        ),
+      );
+    }
+    if (!_isUnlocked) {
+      return Scaffold(
+        body: MathBackground(
+          child: SafeArea(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.lock, color: Colors.white, size: 48),
+                    const SizedBox(height: 12),
+                    Text(
+                      _accessCheckFailed
+                          ? 'Could not verify module access. Please try again.'
+                          : 'This module is locked. Complete the required levels first.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
+                    ),
+                    const SizedBox(height: 20),
+                    CustomButton(
+                      text: 'Back',
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     final lessons = worksheetLessons
-        .where((lesson) => lesson.moduleId == module['id'])
+        .where((lesson) => lesson.moduleId == widget.module['id'])
         .toList(growable: false);
 
     return Scaffold(
@@ -27,7 +118,7 @@ class ModuleLessonScreen extends StatelessWidget {
                     const SizedBox(width: 48),
                     Expanded(
                       child: Text(
-                        module['name']!,
+                        widget.module['name']!,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 24,
@@ -88,13 +179,6 @@ class ModuleLessonScreen extends StatelessWidget {
                               ],
                             ),
                           ),
-                        const SizedBox(height: 8),
-                        CustomButton(
-                          text: 'Back to Modules',
-                          width: double.infinity,
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                        const SizedBox(height: 12),
                       ],
                     ),
                   ),

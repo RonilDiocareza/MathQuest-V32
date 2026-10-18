@@ -43,6 +43,9 @@ class _TeacherAnalyticsScreenState extends State<TeacherAnalyticsScreen>
           name: studentName,
           levelProgress: levelProgress.toStringAsFixed(1),
           questAttempts: progress.questAttempts,
+          classroomQuestCompletionTimeSeconds:
+              progress.classroomQuestCompletionTimes[
+                  UserProgressService.classroomQuestId],
           levelsCompleted: progress.completedCount,
           totalLevels: totalLevels,
         ),
@@ -286,6 +289,15 @@ const SizedBox(height: 16),
                         color: Colors.blue,
                       ),
                     ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'Completion time: ${student.classroomQuestCompletionTimeSeconds == null ? 'Not completed' : _formatCompletionTime(student.classroomQuestCompletionTimeSeconds!)}',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black87,
+                      ),
+                    ),
                   ],
                 ),
               ],
@@ -316,6 +328,12 @@ const SizedBox(height: 16),
         ],
       ),
     );
+  }
+
+  String _formatCompletionTime(int seconds) {
+    final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+    final remainingSeconds = (seconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$remainingSeconds';
   }
 
   Widget _buildStatCard(
@@ -356,6 +374,7 @@ class StudentAnalytics {
   final String name;
   final String levelProgress;
   final int questAttempts;
+  final int? classroomQuestCompletionTimeSeconds;
   final int levelsCompleted;
   final int totalLevels;
 
@@ -363,6 +382,7 @@ class StudentAnalytics {
     required this.name,
     required this.levelProgress,
     required this.questAttempts,
+    required this.classroomQuestCompletionTimeSeconds,
     required this.levelsCompleted,
     required this.totalLevels,
   });

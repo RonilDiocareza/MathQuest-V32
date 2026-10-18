@@ -31,87 +31,20 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(userId)).data.role == 'student';
     }
 
-    function validStudentRegistration(userId) {
-      let data = request.resource.data;
-      let lrnIndex =
-        /databases/$(database)/documents/lrnIndexes/$(data.lrn);
-      return signedIn()
-        && request.auth.uid == userId
-        && data.keys().hasOnly([
-          'uid',
-          'email',
-          'role',
-          'status',
-          'name',
-          'address',
-          'lrn',
-          'character',
-          'profilePhotoUrl',
-          'tutorialEligible',
-          'tutorialCompleted'
-        ])
-        && data.keys().hasAll([
-          'uid',
-          'email',
-          'role',
-          'status',
-          'name',
-          'address',
-          'lrn',
-          'character',
-          'profilePhotoUrl',
-          'tutorialEligible',
-          'tutorialCompleted'
-        ])
-        && data.uid == userId
-        && data.email == request.auth.token.email
-        && data.role == 'student'
-        && data.status == 'pending'
-        && data.name is string
-        && data.name.size() > 0
-        && data.address is string
-        && data.address.size() > 0
-        && data.lrn is string
-        && data.lrn.matches('^[0-9]{12}$')
-        && data.character in ['boy', 'girl']
-        && data.profilePhotoUrl == ''
-        && data.tutorialEligible == true
-        && data.tutorialCompleted == false
-        && existsAfter(lrnIndex)
-        && getAfter(lrnIndex).data.uid == userId
-        && getAfter(lrnIndex).data.lrn == data.lrn;
-    }
-
-    function validLrnReservation(indexId) {
-      let data = request.resource.data;
-      let userRef =
-        /databases/$(database)/documents/users/$(data.uid);
-      return signedIn()
-        && request.auth.uid == data.uid
-        && data.keys().hasOnly(['uid', 'lrn', 'createdAt'])
-        && data.keys().hasAll(['uid', 'lrn', 'createdAt'])
-        && data.lrn == indexId
-        && data.lrn.matches('^[0-9]{12}$')
-        && data.createdAt == request.time
-        && existsAfter(userRef)
-        && getAfter(userRef).data.uid == data.uid
-        && getAfter(userRef).data.lrn == data.lrn
-        && getAfter(userRef).data.role == 'student'
-        && getAfter(userRef).data.status == 'pending';
-    }
-
     function validLeaderboardEntry(userId) {
       return request.resource.data.keys().hasOnly([
           'uid',
           'displayName',
           'totalScore',
           'highestCompletedLevel',
+          'createdAt',
           'updatedAt'
         ])
         && request.resource.data.keys().hasAll([
           'uid',
           'displayName',
           'totalScore',
+          'createdAt',
           'updatedAt'
         ])
         && request.resource.data.uid == userId
@@ -121,6 +54,18 @@ service cloud.firestore {
           == get(/databases/$(database)/documents/users/$(userId)).data.name
         && request.resource.data.totalScore is int
         && request.resource.data.totalScore >= 0
+        && request.resource.data.createdAt is timestamp
+        && ((get(
+              /databases/$(database)/documents/users/$(userId)
+            ).data.keys().hasAny(['createdAt'])
+            && request.resource.data.createdAt
+              == get(
+                /databases/$(database)/documents/users/$(userId)
+              ).data.createdAt)
+          || (!get(
+                /databases/$(database)/documents/users/$(userId)
+              ).data.keys().hasAny(['createdAt'])
+            && request.resource.data.createdAt == request.time))
         && (!request.resource.data.keys().hasAny(['highestCompletedLevel'])
           || (request.resource.data.highestCompletedLevel is int
             && request.resource.data.highestCompletedLevel >= 0
@@ -130,7 +75,7 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if hasActiveSession() && (request.auth.uid == userId || isAdmin());
-      allow create: if validStudentRegistration(userId);
+      allow create: if false;
       allow update: if (signedIn()
               && request.auth.uid == userId
               && request.resource.data.diff(resource.data).affectedKeys()
@@ -140,6 +85,7 @@ service cloud.firestore {
         || validGameModeCompletionProgressUpdate(userId)
         || validNpcQuestionProgressUpdate(userId)
         || validNpcQuestionResetProgressUpdate(userId)
+        || validClassroomQuestCompletionUpdate(userId)
         || (request.resource.data.lrn == resource.data.lrn
           && (isAdmin()
         || (isApprovedStudent(userId)
@@ -167,7 +113,7 @@ service cloud.firestore {
     match /lrnIndexes/{indexId} {
       allow get: if isAdmin();
       allow list: if false;
-      allow create: if validLrnReservation(indexId);
+      allow create: if false;
       allow update: if false;
       allow delete: if isAdmin()
         && resource.data.uid is string
@@ -209,6 +155,8 @@ service cloud.firestore {
   'completedNpcQuestionsByLevel',
   'unlockedLevels',
   'questAttempts',
+  'classroomQuestCompletionTimes',
+  'classroomQuestResults',
   'maxUnlockedSubLevel',
   'levelQuestionAnswers',
   'latestLevelQuestionAnswerLevel',
@@ -242,6 +190,22 @@ service cloud.firestore {
           && (!userData.progress.keys().hasAny(['questAttempts'])
             || (userData.progress.questAttempts is int
               && userData.progress.questAttempts >= 0))
+          && (!userData.progress.keys()
+                .hasAny(['classroomQuestCompletionTimes'])
+            || (userData.progress.classroomQuestCompletionTimes is map
+              && userData.progress.classroomQuestCompletionTimes.keys()
+                .hasOnly(['classroom_quest'])
+              && (!userData.progress.classroomQuestCompletionTimes.keys()
+                    .hasAny(['classroom_quest'])
+                || (userData.progress.classroomQuestCompletionTimes
+                      .classroom_quest is int
+                  && userData.progress.classroomQuestCompletionTimes
+                    .classroom_quest >= 1))))
+          && (!userData.progress.keys()
+                .hasAny(['classroomQuestResults'])
+            || (userData.progress.classroomQuestResults is map
+              && userData.progress.classroomQuestResults.keys()
+                .hasOnly(['classroom_quest'])))
           && (!userData.progress.keys().hasAny(['maxUnlockedSubLevel'])
             || (userData.progress.maxUnlockedSubLevel is map
               && userData.progress.maxUnlockedSubLevel.keys()
@@ -413,6 +377,70 @@ service cloud.firestore {
           'latestLevelQuestionAnswerLevel'
         ])
         && validLevelQuestionAnswerUpdate(oldProgress, newProgress);
+    }
+
+    function validClassroomQuestCompletionUpdate(userId) {
+      let oldProgress = resource.data.get('progress', {});
+      let newProgress = request.resource.data.get('progress', {});
+      let oldResults = oldProgress.get('classroomQuestResults', {});
+      let newResults = newProgress.get('classroomQuestResults', {});
+      let resultDiff = newResults.diff(oldResults);
+      let oldTimes = oldProgress.get('classroomQuestCompletionTimes', {});
+      let newTimes = newProgress.get('classroomQuestCompletionTimes', {});
+      let timeDiff = newTimes.diff(oldTimes);
+      let result = newResults.get('classroom_quest', null);
+      return isApprovedStudent(userId)
+        && request.resource.data.lrn == resource.data.lrn
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['progress'])
+        && oldProgress is map
+        && newProgress is map
+        && oldResults is map
+        && newResults is map
+        && newProgress.diff(oldProgress).affectedKeys().hasOnly([
+          'classroomQuestCompletionTimes',
+          'classroomQuestResults'
+        ])
+        && resultDiff.addedKeys().size() == 1
+        && resultDiff.addedKeys().hasOnly(['classroom_quest'])
+        && resultDiff.changedKeys().size() == 0
+        && resultDiff.removedKeys().size() == 0
+        && oldTimes is map
+        && newTimes is map
+        && timeDiff.removedKeys().size() == 0
+        && timeDiff.changedKeys().size() + timeDiff.addedKeys().size() <= 1
+        && timeDiff.affectedKeys().hasOnly(['classroom_quest'])
+        && result is map
+        && newTimes.get('classroom_quest', null)
+          == result.get('completionTimeSeconds', null)
+        && result.keys().hasOnly([
+          'status',
+          'completionTimeSeconds',
+          'score',
+          'correctAnswers',
+          'totalQuestions',
+          'completedAt'
+        ])
+        && result.keys().hasAll([
+          'status',
+          'completionTimeSeconds',
+          'score',
+          'correctAnswers',
+          'totalQuestions',
+          'completedAt'
+        ])
+        && result.status == 'completed'
+        && result.completionTimeSeconds is int
+        && result.completionTimeSeconds >= 1
+        && result.correctAnswers is int
+        && result.correctAnswers == 3
+        && result.totalQuestions is int
+        && result.totalQuestions == 3
+        && result.score is int
+        && result.score == result.correctAnswers * 10
+        && result.completedAt == request.time;
     }
 
     function validGameModeScoreAddition(oldProgress, newProgress) {
@@ -648,6 +676,10 @@ service cloud.firestore {
         && newNpcProgress.diff(oldNpcProgress).changedKeys().size() == 0
         && newNpcProgress.diff(oldNpcProgress).addedKeys().size() == 0
         && newNpcProgress.diff(oldNpcProgress).removedKeys().size() == 0
+        && newProgress.get('classroomQuestCompletionTimes', {})
+          == oldProgress.get('classroomQuestCompletionTimes', {})
+        && newProgress.get('classroomQuestResults', {})
+          == oldProgress.get('classroomQuestResults', {})
         && newProgress.get('completedNpcQuestions', [])
           == oldProgress.get('completedNpcQuestions', [])
         && newProgress.get('latestCompletedNpcQuestionLevel', null)

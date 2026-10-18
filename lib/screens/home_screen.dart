@@ -15,6 +15,7 @@ import 'teacher_analytics_screen.dart';
 import 'profile_screen.dart';
 import 'modules_screen.dart';
 import 'leaderboard_screen.dart';
+import 'landing_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -40,8 +41,10 @@ class _HomeScreenState extends State<HomeScreen> {
   final GlobalKey _leaderboardTutorialKey = GlobalKey();
   int? _currentRank;
   Timer? _rankPopupTimer;
+  Timer? _helpPopupTimer;
   int _rankRequest = 0;
   bool _showRankPopup = false;
+  bool _showHelpPopup = false;
 
   List<FirstTimeTutorialStep> get _tutorialSteps => [
         const FirstTimeTutorialStep(
@@ -110,10 +113,27 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _profileService = ProfileService();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _showHelpPopupForHomeEntry();
+    });
     _checkFirstTimeTutorial();
     _showRankPopupWhenReady();
     _loadProfileData();
     _warmProgressData();
+  }
+
+  void _startHelpPopupTimer() {
+    _helpPopupTimer?.cancel();
+    _helpPopupTimer = Timer(const Duration(seconds: 20), () {
+      _helpPopupTimer = null;
+      if (mounted) setState(() => _showHelpPopup = false);
+    });
+  }
+
+  void _showHelpPopupForHomeEntry() {
+    if (!mounted) return;
+    setState(() => _showHelpPopup = true);
+    _startHelpPopupTimer();
   }
 
   Future<void> _checkFirstTimeTutorial() async {
@@ -172,6 +192,13 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _showFirstTimeTutorial = true);
   }
 
+  void _onHelpIconTapped() {
+    _helpPopupTimer?.cancel();
+    _helpPopupTimer = null;
+    if (_showHelpPopup) setState(() => _showHelpPopup = false);
+    _showTutorialAgain();
+  }
+
   Future<void> _focusTutorialStep(int index) async {
     final step = _tutorialSteps[index];
     final targetKey = step.targetKey;
@@ -227,6 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _rankPopupTimer?.cancel();
+    _helpPopupTimer?.cancel();
     _rankRequest++;
     super.dispose();
   }
@@ -242,6 +270,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _openScreen(Widget screen) {
     _hideRankPopup();
+    _helpPopupTimer?.cancel();
+    _helpPopupTimer = null;
+    if (_showHelpPopup) setState(() => _showHelpPopup = false);
     unawaited(
       Navigator.of(context)
           .push(
@@ -252,7 +283,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       )
           .then((_) {
-        if (mounted) _showRankPopupWhenReady();
+        if (mounted) {
+          _showRankPopupWhenReady();
+          _showHelpPopupForHomeEntry();
+        }
       }),
     );
   }
@@ -283,6 +317,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  void _returnToLanding() {
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder<void>(
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            const LandingScreen(),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -293,56 +338,86 @@ class _HomeScreenState extends State<HomeScreen> {
               _buildHomeContent(context),
               Positioned(
                 top: 56,
-                left: 68,
-                right: 68,
-                child: Image.asset(
-                  'assets/images/Icon/Icon2.png',
+                left: 16,
+                right: 16,
+                child: SizedBox(
                   height: 56,
-                  fit: BoxFit.contain,
-                ),
-              ),
-              Positioned(
-                top: 56,
-                right: 18,
-                child: GestureDetector(
-                  onTap: () => _openProfileDialog(context),
-                  child: Container(
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.18),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
+                  child: Row(
+                    children: [
+                      Material(
+                        color: const Color(0xFFFFF3D8),
+                        shape: const CircleBorder(
+                          side: BorderSide(
+                            color: Color(0xFF8F5C2D),
+                            width: 1.5,
+                          ),
                         ),
-                      ],
-                    ),
-                    key: _profileTutorialKey,
-                    child: _profilePhoto != null
-                        ? ClipOval(
-                            child: Image.memory(
-                              _profilePhoto!,
-                              fit: BoxFit.cover,
-                              width: 54,
-                              height: 54,
-                            ),
-                          )
-                        : CircleAvatar(
-                            backgroundColor: const Color(0xFFD09F5C),
-                            child: ClipOval(
-                              child: Image.asset(
-                                _userCharacter == 'girl'
-                                    ? 'assets/images/player/girl.png'
-                                    : 'assets/images/player/boy.png',
-                                fit: BoxFit.cover,
-                                width: 54,
-                                height: 54,
-                              ),
+                        child: InkWell(
+                          key: const ValueKey('home-navigation'),
+                          onTap: _returnToLanding,
+                          customBorder: const CircleBorder(),
+                          child: const SizedBox(
+                            width: 44,
+                            height: 44,
+                            child: Icon(
+                              Icons.home_rounded,
+                              size: 25,
+                              color: Color(0xFF5A3620),
                             ),
                           ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Image.asset(
+                          'assets/images/Icon/Icon2.png',
+                          height: 56,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GestureDetector(
+                        onTap: () => _openProfileDialog(context),
+                        child: Container(
+                          width: 54,
+                          height: 54,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.18),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          key: _profileTutorialKey,
+                          child: _profilePhoto != null
+                              ? ClipOval(
+                                  child: Image.memory(
+                                    _profilePhoto!,
+                                    fit: BoxFit.cover,
+                                    width: 54,
+                                    height: 54,
+                                  ),
+                                )
+                              : CircleAvatar(
+                                  backgroundColor: const Color(0xFFD09F5C),
+                                  child: ClipOval(
+                                    child: Image.asset(
+                                      _userCharacter == 'girl'
+                                          ? 'assets/images/player/girl.png'
+                                          : 'assets/images/player/boy.png',
+                                      fit: BoxFit.cover,
+                                      width: 54,
+                                      height: 54,
+                                    ),
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -358,7 +433,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                   child: InkWell(
-                    onTap: _showTutorialAgain,
+                    onTap: _onHelpIconTapped,
                     customBorder: const CircleBorder(),
                     child: const SizedBox(
                       width: 38,
@@ -410,6 +485,57 @@ class _HomeScreenState extends State<HomeScreen> {
                     onStepChanged: _focusTutorialStep,
                   ),
                 ),
+              Positioned(
+                top: 8,
+                left: 12,
+                right: 62,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    opacity: _showHelpPopup ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    curve: Curves.easeOut,
+                    child: AnimatedScale(
+                      scale: _showHelpPopup ? 1 : 0.96,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut,
+                      alignment: Alignment.centerRight,
+                      child: Align(
+                        alignment: Alignment.centerRight,
+                        child: Container(
+                          constraints: BoxConstraints(
+                            maxWidth: MediaQuery.sizeOf(context).width - 86,
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF1E7D4),
+                            border: Border.all(color: const Color(0xFF7E4A23)),
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.15),
+                                blurRadius: 6,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: const Text(
+                            'Need Help?',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF744411),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

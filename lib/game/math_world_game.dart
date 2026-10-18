@@ -399,7 +399,7 @@ class MathWorldGame extends FlameGame
         );
       _buildCollisionLookup();
 
-      startPosition = Vector2(mapWidth / 2, mapHeight / 2);
+      startPosition = Vector2(570, 620);
       final zoom = _mapZoom;
       if (!zoom.isFinite || zoom <= 0) {
         throw StateError('The game camera has an invalid zoom value.');

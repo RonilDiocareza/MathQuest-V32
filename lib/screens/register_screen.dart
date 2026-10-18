@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import '../game/player.dart';
 import '../services/auth_service.dart';
 import '../widgets/custom_button.dart';
@@ -112,11 +113,41 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'email-already-in-use' => 'An account already uses this email.',
         'weak-password' => 'Choose a stronger password.',
         'invalid-email' => 'Enter a valid email address.',
+        'wrong-password' ||
+        'invalid-credential' =>
+          'The email is already registered. Enter the password for that account to retry registration.',
+        'network-request-failed' =>
+          'Could not connect to Firebase. Check your connection and try again.',
         _ => 'Could not create the account. Please try again.',
       };
     }
+    if (error is FirebaseFunctionsException) {
+      return switch (error.code) {
+        'already-exists' =>
+          (error.message?.toLowerCase().contains('lrn') ?? false)
+              ? 'This LRN is already registered.'
+              : 'This account is already registered.',
+        'invalid-argument' =>
+          error.message ?? 'Check that all registration details are valid.',
+        'unavailable' ||
+        'deadline-exceeded' =>
+          'Registration could not reach the server. Check your connection and retry using the same email and password.',
+        'not-found' =>
+          'The registration service is not deployed. Please contact an administrator.',
+        'unauthenticated' =>
+          'Could not verify the new account. Please retry using the same email and password.',
+        _ =>
+          'Could not save the registration profile (${error.code}). Please retry using the same email and password.',
+      };
+    }
     if (error is FirebaseException && error.code == 'permission-denied') {
-      return 'This LRN may already be registered, or the account could not be saved. Check the details and try again.';
+      return 'The registration could not be saved because Firebase denied the request. Please contact an administrator.';
+    }
+    if (error is ArgumentError) {
+      return error.message?.toString() ?? 'Check the registration details.';
+    }
+    if (error is StateError) {
+      return error.message;
     }
     return 'Could not complete registration. Please try again.';
   }
